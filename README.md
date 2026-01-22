@@ -6,12 +6,19 @@ Turn your Raspberry Pi into a WiFi access point via ethernet.
 [Router] ──ethernet──▶ [Pi] )))WiFi))) [Devices]
 ```
 
+## Compatibility
+
+- **Raspberry Pi OS Bookworm** (2023+) - NetworkManager ✅
+- **Raspberry Pi OS Bullseye** (Legacy) - dhcpcd ✅
+- **Raspberry Pi 4/5** - Tested ✅
+
 ## Features
 
 - **Bridged mode** - devices get IPs from your main router
 - **Simple setup** - one command
 - **Pi Imager support** - auto-configure on first boot
 - **GUI settings** - change SSID/password anytime
+- **Auto-detects** NetworkManager or dhcpcd
 
 ## Quick Setup
 

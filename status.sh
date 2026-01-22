@@ -15,10 +15,17 @@ else
     echo -e "hostapd: ${RED}● stopped${NC}"
 fi
 
-if ip link show br0 &>/dev/null; then
+if ip link show br0 &>/dev/null && [[ $(cat /sys/class/net/br0/operstate 2>/dev/null) == "up" ]]; then
     echo -e "bridge:  ${GREEN}● active${NC}"
 else
     echo -e "bridge:  ${RED}● inactive${NC}"
+fi
+
+# Network manager detection
+if systemctl is-active --quiet NetworkManager; then
+    echo -e "netmgr:  NetworkManager (Bookworm+)"
+elif systemctl is-active --quiet dhcpcd; then
+    echo -e "netmgr:  dhcpcd (Legacy)"
 fi
 
 # Config

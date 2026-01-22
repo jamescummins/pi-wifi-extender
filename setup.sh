@@ -1,13 +1,11 @@
 #!/bin/bash
 # Pi WiFi Extender - Setup Script
 # Usage: sudo ./setup.sh "MySSID" "MyPassword" [channel] [country]
+#        sudo ./setup.sh --revert
 
 set -e
 
-WIFI_SSID="${1:-PiExtender}"
-WIFI_PASSWORD="$2"
-WIFI_CHANNEL="${3:-6}"
-COUNTRY_CODE="${4:-IE}"
+BACKUP_DIR="/var/lib/wifi-extender-backup"
 
 # Colors
 RED='\033[0;31m'
@@ -20,9 +18,51 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+# Handle --revert flag
+if [[ "$1" == "--revert" ]]; then
+    if [[ ! -d "$BACKUP_DIR" ]]; then
+        echo -e "${RED}No backup found to restore${NC}"
+        exit 1
+    fi
+    
+    echo "Reverting to backup..."
+    
+    systemctl stop hostapd 2>/dev/null || true
+    systemctl disable hostapd 2>/dev/null || true
+    
+    # Restore files
+    [[ -f "$BACKUP_DIR/dhcpcd.conf" ]] && cp "$BACKUP_DIR/dhcpcd.conf" /etc/dhcpcd.conf
+    [[ -f "$BACKUP_DIR/hostapd.conf" ]] && cp "$BACKUP_DIR/hostapd.conf" /etc/hostapd/ || rm -f /etc/hostapd/hostapd.conf
+    [[ -f "$BACKUP_DIR/hostapd-default" ]] && cp "$BACKUP_DIR/hostapd-default" /etc/default/hostapd
+    rm -f /etc/network/interfaces.d/br0
+    
+    # NetworkManager cleanup
+    if systemctl is-active --quiet NetworkManager; then
+        rm -f /etc/NetworkManager/conf.d/10-hostapd.conf
+        nmcli connection delete bridge-slave-eth0 2>/dev/null || true
+        nmcli connection delete bridge-br0 2>/dev/null || true
+        systemctl reload NetworkManager
+    fi
+    
+    # Remove bridge
+    ip link set br0 down 2>/dev/null || true
+    ip link delete br0 type bridge 2>/dev/null || true
+    
+    echo -e "${GREEN}✓ Reverted to backup${NC}"
+    echo "Reboot to complete: sudo reboot"
+    exit 0
+fi
+
+WIFI_SSID="${1:-PiExtender}"
+WIFI_PASSWORD="$2"
+WIFI_CHANNEL="${3:-6}"
+COUNTRY_CODE="${4:-IE}"
+
 # Check password
 if [[ -z "$WIFI_PASSWORD" ]] || [[ ${#WIFI_PASSWORD} -lt 8 ]]; then
     echo "Usage: sudo $0 \"SSID\" \"Password\" [channel] [country]"
+    echo "       sudo $0 --revert"
+    echo ""
     echo "  Password must be at least 8 characters"
     echo "  Channel: 1, 6, 11 (default: 6)"
     echo "  Country: IE, GB, US, DE (default: IE)"
@@ -31,11 +71,30 @@ fi
 
 echo -e "${GREEN}Setting up WiFi Extender...${NC}"
 
+# Create backup (only on first run)
+if [[ ! -d "$BACKUP_DIR" ]]; then
+    echo "Creating backup..."
+    mkdir -p "$BACKUP_DIR"
+    cp /etc/dhcpcd.conf "$BACKUP_DIR/" 2>/dev/null || true
+    cp /etc/hostapd/hostapd.conf "$BACKUP_DIR/" 2>/dev/null || true
+    cp /etc/default/hostapd "$BACKUP_DIR/hostapd-default" 2>/dev/null || true
+    echo "Backup saved to $BACKUP_DIR"
+fi
+
+# Detect network manager
+USE_NETWORKMANAGER=false
+if systemctl is-active --quiet NetworkManager; then
+    USE_NETWORKMANAGER=true
+    echo "Detected: NetworkManager (Bookworm+)"
+else
+    echo "Detected: dhcpcd (Legacy)"
+fi
+
 # Install packages
 apt-get update -qq
 apt-get install -y -qq hostapd bridge-utils
 
-# Stop hostapd
+# Stop hostapd and unblock wifi
 systemctl stop hostapd 2>/dev/null || true
 rfkill unblock wlan 2>/dev/null || true
 
@@ -57,24 +116,52 @@ ieee80211n=1
 EOF
 chmod 600 /etc/hostapd/hostapd.conf
 
-# Set daemon config
-sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd 2>/dev/null || \
-  echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
-
-# Backup and configure dhcpcd
-[[ ! -f /etc/dhcpcd.conf.backup ]] && cp /etc/dhcpcd.conf /etc/dhcpcd.conf.backup
-if ! grep -q "denyinterfaces wlan0 eth0" /etc/dhcpcd.conf; then
-    echo -e "\n# Pi WiFi Extender\ndenyinterfaces wlan0 eth0\ninterface br0" >> /etc/dhcpcd.conf
-fi
-
-# Configure bridge
-cat > /etc/network/interfaces.d/br0 << EOF
+# Configure based on network manager
+if $USE_NETWORKMANAGER; then
+    # NetworkManager configuration (Bookworm+)
+    
+    # Create bridge connection
+    nmcli connection delete br0 2>/dev/null || true
+    nmcli connection delete bridge-br0 2>/dev/null || true
+    nmcli connection delete bridge-slave-eth0 2>/dev/null || true
+    
+    nmcli connection add type bridge ifname br0 con-name bridge-br0 \
+        ipv4.method auto ipv6.method auto
+    nmcli connection add type bridge-slave ifname eth0 master br0 \
+        con-name bridge-slave-eth0
+    
+    # Prevent NetworkManager from managing wlan0 (hostapd will)
+    mkdir -p /etc/NetworkManager/conf.d
+    cat > /etc/NetworkManager/conf.d/10-hostapd.conf << EOF
+[keyfile]
+unmanaged-devices=interface-name:wlan0
+EOF
+    
+    # Reload NetworkManager
+    systemctl reload NetworkManager
+    
+    # Bring up bridge
+    nmcli connection up bridge-br0 2>/dev/null || true
+else
+    # Legacy dhcpcd configuration (Bullseye and older)
+    sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd 2>/dev/null || \
+      echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
+    
+    # Backup and configure dhcpcd
+    [[ ! -f /etc/dhcpcd.conf.backup ]] && cp /etc/dhcpcd.conf /etc/dhcpcd.conf.backup
+    if ! grep -q "denyinterfaces wlan0 eth0" /etc/dhcpcd.conf; then
+        echo -e "\n# Pi WiFi Extender\ndenyinterfaces wlan0 eth0\ninterface br0" >> /etc/dhcpcd.conf
+    fi
+    
+    # Configure bridge via interfaces
+    cat > /etc/network/interfaces.d/br0 << EOF
 auto br0
 iface br0 inet dhcp
     bridge_ports eth0
     bridge_stp off
     bridge_fd 0
 EOF
+fi
 
 # Enable hostapd
 systemctl unmask hostapd
@@ -85,3 +172,4 @@ echo -e "${GREEN}✓ Setup complete!${NC}"
 echo "  SSID: $WIFI_SSID | Channel: $WIFI_CHANNEL | Country: $COUNTRY_CODE"
 echo ""
 echo "Reboot to activate: sudo reboot"
+echo "To revert changes:  sudo ./setup.sh --revert"

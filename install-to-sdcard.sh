@@ -32,12 +32,20 @@ echo "Installing to: $BOOT_PATH"
 echo "SSID: $WIFI_SSID | Channel: $WIFI_CHANNEL | Country: $COUNTRY_CODE"
 
 # Create firstrun script
-cat > "$BOOT_PATH/firstrun.sh" << EOF
+cat > "$BOOT_PATH/firstrun.sh" << 'FIRSTRUN_OUTER'
 #!/bin/bash
+# Clean up firstrun from both possible boot locations
 rm -f /boot/firstrun.sh /boot/firmware/firstrun.sh
 sed -i 's| systemd.run.*||g' /boot/cmdline.txt /boot/firmware/cmdline.txt 2>/dev/null
+
 apt-get update -qq && apt-get install -y -qq hostapd bridge-utils
 systemctl stop hostapd 2>/dev/null; rfkill unblock wlan 2>/dev/null
+
+# Write hostapd config
+FIRSTRUN_OUTER
+
+# Insert variables into the script
+cat >> "$BOOT_PATH/firstrun.sh" << EOF
 cat > /etc/hostapd/hostapd.conf << CONF
 interface=wlan0
 bridge=br0
@@ -54,18 +62,42 @@ wmm_enabled=1
 ieee80211n=1
 CONF
 chmod 600 /etc/hostapd/hostapd.conf
-sed -i 's|^#\\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
-echo -e "\\n# Pi WiFi Extender\\ndenyinterfaces wlan0 eth0\\ninterface br0" >> /etc/dhcpcd.conf
-cat > /etc/network/interfaces.d/br0 << BR
+EOF
+
+# Continue with network configuration
+cat >> "$BOOT_PATH/firstrun.sh" << 'FIRSTRUN_INNER'
+
+# Detect network manager and configure accordingly
+if systemctl is-active --quiet NetworkManager; then
+    # NetworkManager (Bookworm+)
+    nmcli connection delete br0 2>/dev/null || true
+    nmcli connection delete bridge-br0 2>/dev/null || true
+    nmcli connection delete bridge-slave-eth0 2>/dev/null || true
+    
+    nmcli connection add type bridge ifname br0 con-name bridge-br0 \
+        ipv4.method auto ipv6.method auto
+    nmcli connection add type bridge-slave ifname eth0 master br0 \
+        con-name bridge-slave-eth0
+    
+    mkdir -p /etc/NetworkManager/conf.d
+    echo -e "[keyfile]\nunmanaged-devices=interface-name:wlan0" > /etc/NetworkManager/conf.d/10-hostapd.conf
+    systemctl reload NetworkManager
+else
+    # Legacy dhcpcd (Bullseye and older)
+    sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+    echo -e "\n# Pi WiFi Extender\ndenyinterfaces wlan0 eth0\ninterface br0" >> /etc/dhcpcd.conf
+    cat > /etc/network/interfaces.d/br0 << BR
 auto br0
 iface br0 inet dhcp
     bridge_ports eth0
     bridge_stp off
     bridge_fd 0
 BR
+fi
+
 systemctl unmask hostapd && systemctl enable hostapd
 reboot
-EOF
+FIRSTRUN_INNER
 
 chmod +x "$BOOT_PATH/firstrun.sh"
 
