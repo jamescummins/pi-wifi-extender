@@ -6,51 +6,54 @@ Turn your Raspberry Pi into a WiFi access point via ethernet.
 [Router] ──ethernet──▶ [Pi] )))WiFi))) [Devices]
 ```
 
-## Compatibility
+## Quick Start
 
-- **Raspberry Pi OS Bookworm** (2023+) - NetworkManager ✅
-- **Raspberry Pi OS Bullseye** (Legacy) - dhcpcd ✅
-- **Raspberry Pi 4/5** - Tested ✅
+```bash
+# Install GUI
+./install-gui.sh
 
-## Features
+# Launch GUI
+./wifi-extender-gui.py
+```
 
-- **Bridged mode** - devices get IPs from your main router
-- **Simple setup** - one command
-- **Pi Imager support** - auto-configure on first boot
-- **GUI settings** - change SSID/password anytime
-- **Auto-detects** NetworkManager or dhcpcd
-
-## Quick Setup
-
+Or via command line:
 ```bash
 sudo ./setup.sh "MyNetwork" "MyPassword123"
 sudo reboot
 ```
 
-With options:
-```bash
-sudo ./setup.sh "MyNetwork" "MyPassword123" 6 IE
-#                SSID        Password      Channel Country
-```
+## GUI Features
 
-## For Pi Imager (Auto-setup on first boot)
+- Configure SSID, password, channel, country
+- Choose 2.4GHz or 5GHz band
+- Apply settings with one click
+- Revert to previous configuration
+- Check for updates from GitHub
 
-After flashing SD card:
+## Compatibility
+
+| OS | Status |
+|----|--------|
+| Raspberry Pi OS Bookworm (2023+) | ✅ NetworkManager |
+| Raspberry Pi OS Bullseye | ✅ dhcpcd |
+| Raspberry Pi 4/5 | ✅ Tested |
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `./wifi-extender-gui.py` | Launch GUI |
+| `./status.sh` | Check status |
+| `sudo ./setup.sh --revert` | Restore previous config |
+| `sudo ./uninstall.sh` | Remove completely |
+
+## Pi Imager (Headless Setup)
+
+After flashing your SD card:
 ```bash
 ./install-to-sdcard.sh /media/user/bootfs "MyNetwork" "MyPassword123"
 ```
-Eject, insert in Pi, power on. Done!
 
-## Other Commands
+## License
 
-```bash
-./status.sh              # Check status
-./settings-gui.py        # GUI to change settings
-sudo ./uninstall.sh      # Remove and restore normal WiFi
-```
-
-## Defaults
-
-- Country: IE (Ireland)
-- Channel: 6
-- Mode: Bridged (devices get IPs from your router)
+MIT

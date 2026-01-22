@@ -1,6 +1,6 @@
 #!/bin/bash
 # Pi WiFi Extender - Setup Script
-# Usage: sudo ./setup.sh "MySSID" "MyPassword" [channel] [country]
+# Usage: sudo ./setup.sh "MySSID" "MyPassword" [channel] [country] [band]
 #        sudo ./setup.sh --revert
 
 set -e
@@ -57,19 +57,45 @@ WIFI_SSID="${1:-PiExtender}"
 WIFI_PASSWORD="$2"
 WIFI_CHANNEL="${3:-6}"
 COUNTRY_CODE="${4:-IE}"
+WIFI_BAND="${5:-g}"  # g = 2.4GHz, a = 5GHz
+
+# Validate band and adjust settings
+if [[ "$WIFI_BAND" == "a" ]]; then
+    HW_MODE="a"
+    # Validate 5GHz channel
+    if [[ ! "$WIFI_CHANNEL" =~ ^(36|40|44|48|149|153|157|161|165)$ ]]; then
+        WIFI_CHANNEL=36
+    fi
+else
+    HW_MODE="g"
+    # Validate 2.4GHz channel
+    if [[ "$WIFI_CHANNEL" -lt 1 || "$WIFI_CHANNEL" -gt 13 ]] 2>/dev/null; then
+        WIFI_CHANNEL=6
+    fi
+fi
+
+# Detect WiFi interface
+WIFI_IFACE=$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2; exit}')
+WIFI_IFACE=${WIFI_IFACE:-wlan0}
 
 # Check password
 if [[ -z "$WIFI_PASSWORD" ]] || [[ ${#WIFI_PASSWORD} -lt 8 ]]; then
-    echo "Usage: sudo $0 \"SSID\" \"Password\" [channel] [country]"
+    echo "Usage: sudo $0 \"SSID\" \"Password\" [channel] [country] [band]"
     echo "       sudo $0 --revert"
     echo ""
     echo "  Password must be at least 8 characters"
-    echo "  Channel: 1, 6, 11 (default: 6)"
+    echo "  Channel: 1-13 for 2.4GHz, 36/40/44/48/149/153/157/161 for 5GHz"
     echo "  Country: IE, GB, US, DE (default: IE)"
+    echo "  Band: g (2.4GHz) or a (5GHz) (default: g)"
     exit 1
 fi
 
 echo -e "${GREEN}Setting up WiFi Extender...${NC}"
+echo "  SSID: $WIFI_SSID"
+echo "  Channel: $WIFI_CHANNEL"
+echo "  Band: $([ "$HW_MODE" = "a" ] && echo "5GHz" || echo "2.4GHz")"
+echo "  Country: $COUNTRY_CODE"
+echo "  Interface: $WIFI_IFACE"
 
 # Create backup (only on first run)
 if [[ ! -d "$BACKUP_DIR" ]]; then
@@ -100,11 +126,11 @@ rfkill unblock wlan 2>/dev/null || true
 
 # Configure hostapd
 cat > /etc/hostapd/hostapd.conf << EOF
-interface=wlan0
+interface=$WIFI_IFACE
 bridge=br0
 driver=nl80211
 ssid=${WIFI_SSID}
-hw_mode=g
+hw_mode=${HW_MODE}
 channel=${WIFI_CHANNEL}
 country_code=${COUNTRY_CODE}
 wpa=2
@@ -114,6 +140,12 @@ rsn_pairwise=CCMP
 wmm_enabled=1
 ieee80211n=1
 EOF
+
+# Add 802.11ac for 5GHz
+if [[ "$HW_MODE" == "a" ]]; then
+    echo "ieee80211ac=1" >> /etc/hostapd/hostapd.conf
+fi
+
 chmod 600 /etc/hostapd/hostapd.conf
 
 # Configure based on network manager
@@ -130,11 +162,11 @@ if $USE_NETWORKMANAGER; then
     nmcli connection add type bridge-slave ifname eth0 master br0 \
         con-name bridge-slave-eth0
     
-    # Prevent NetworkManager from managing wlan0 (hostapd will)
+    # Prevent NetworkManager from managing WiFi interface (hostapd will)
     mkdir -p /etc/NetworkManager/conf.d
     cat > /etc/NetworkManager/conf.d/10-hostapd.conf << EOF
 [keyfile]
-unmanaged-devices=interface-name:wlan0
+unmanaged-devices=interface-name:$WIFI_IFACE
 EOF
     
     # Reload NetworkManager
@@ -149,8 +181,8 @@ else
     
     # Backup and configure dhcpcd
     [[ ! -f /etc/dhcpcd.conf.backup ]] && cp /etc/dhcpcd.conf /etc/dhcpcd.conf.backup
-    if ! grep -q "denyinterfaces wlan0 eth0" /etc/dhcpcd.conf; then
-        echo -e "\n# Pi WiFi Extender\ndenyinterfaces wlan0 eth0\ninterface br0" >> /etc/dhcpcd.conf
+    if ! grep -q "denyinterfaces $WIFI_IFACE eth0" /etc/dhcpcd.conf; then
+        echo -e "\n# Pi WiFi Extender\ndenyinterfaces $WIFI_IFACE eth0\ninterface br0" >> /etc/dhcpcd.conf
     fi
     
     # Configure bridge via interfaces

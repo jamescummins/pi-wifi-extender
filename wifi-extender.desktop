@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=WiFi Extender
+Comment=Configure Pi WiFi Extender
+Exec=pkexec /home/pi/workspace/pi-wifi-extender/wifi-extender-gui.py
+Icon=network-wireless
+Terminal=false
+Type=Application
+Categories=Settings;Network;
+Keywords=wifi;network;hotspot;extender;
